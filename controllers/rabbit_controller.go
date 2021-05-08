@@ -18,6 +18,10 @@ package controllers
 
 import (
 	"context"
+	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -50,7 +54,26 @@ type RabbitReconciler struct {
 func (r *RabbitReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = r.Log.WithValues("rabbit", req.NamespacedName)
 
-	// your logic here
+	var rabbit farmv1.Rabbit
+	if err := r.Get(ctx, req.NamespacedName, &rabbit); err != nil {
+		// we'll ignore not-found errors, since they can't be fixed by an immediate
+		// requeue (we'll need to wait for a new notification), and we can get them
+		// on deleted requests.
+		err = client.IgnoreNotFound(err)
+		if err != nil {
+			r.Log.Error(err, "unable to fetch rabbit")
+		}
+		return ctrl.Result{}, err
+	}
+	r.Log.Info("received update event", "name", rabbit.Name, "namespace", rabbit.Namespace)
+	resourceFuncs := []func(ctx context.Context, rabbit *farmv1.Rabbit) error{
+		r.createRabbits,
+	}
+	for _, resourceFunc := range resourceFuncs {
+		if err := resourceFunc(ctx, &rabbit); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -59,5 +82,45 @@ func (r *RabbitReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 func (r *RabbitReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&farmv1.Rabbit{}).
+		Owns(&appsv1.Deployment{}).
 		Complete(r)
+}
+
+func (r *RabbitReconciler) createRabbits(ctx context.Context, rabbit *farmv1.Rabbit) error {
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      rabbit.Name,
+			Namespace: rabbit.Namespace,
+		},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
+		labels := map[string]string{
+			"RabbitFarm": rabbit.Name,
+		}
+		deployment.Spec = appsv1.DeploymentSpec{
+			Replicas: &rabbit.Spec.StartingPopulation,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
+			Template: v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name:    "base",
+							Image:   "busybox",
+							Command: []string{"tail", "-f", "/dev/null"},
+						},
+					},
+				},
+			},
+		}
+		if err := ctrl.SetControllerReference(rabbit, deployment, r.Scheme); err != nil {
+			return err
+		}
+		return nil
+	})
+	return err
 }

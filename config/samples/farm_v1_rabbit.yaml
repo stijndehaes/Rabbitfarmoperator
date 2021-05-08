@@ -4,4 +4,4 @@ metadata:
   name: rabbit-sample
 spec:
   # Add fields here
-  foo: bar
+  startingPopulation: 10

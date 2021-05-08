@@ -28,8 +28,8 @@ type RabbitSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of Rabbit. Edit rabbit_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	StartingPopulation        int32 `json:"startingPopulation,omitempty"`
+	IncreasePopulationSeconds int32 `json:"increasePopulationSeconds,omitempty"`
 }
 
 // RabbitStatus defines the observed state of Rabbit

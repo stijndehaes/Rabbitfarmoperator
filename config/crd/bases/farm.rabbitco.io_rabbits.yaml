@@ -36,10 +36,12 @@ spec:
           spec:
             description: RabbitSpec defines the desired state of Rabbit
             properties:
-              foo:
-                description: Foo is an example field of Rabbit. Edit rabbit_types.go
-                  to remove/update
-                type: string
+              increasePopulationSeconds:
+                format: int32
+                type: integer
+              startingPopulation:
+                format: int32
+                type: integer
             type: object
           status:
             description: RabbitStatus defines the observed state of Rabbit
