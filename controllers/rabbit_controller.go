@@ -32,8 +32,17 @@ import (
 	farmv1 "rabbitco.io/api/v1"
 )
 
+type Clock interface {
+	Now() time.Time
+}
+
+type RealClock struct{}
+
+func (_ RealClock) Now() time.Time { return time.Now() }
+
 // RabbitReconciler reconciles a Rabbit object
 type RabbitReconciler struct {
+	Clock
 	client.Client
 	Log    logr.Logger
 	Scheme *runtime.Scheme
@@ -114,7 +123,7 @@ func (r *RabbitReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 	if rabbit.Spec.IncreasePopulationSeconds != 0 {
-		dur := rabbit.Status.LastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Sub(time.Now())
+		dur := rabbit.Status.LastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Sub(r.Now())
 		r.Log.Info("Scheduling for requeue in", "duration", dur)
 		return ctrl.Result{
 			RequeueAfter: dur,
@@ -125,6 +134,9 @@ func (r *RabbitReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *RabbitReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Clock == nil {
+		r.Clock = &RealClock{}
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&farmv1.Rabbit{}).
 		Owns(&appsv1.Deployment{}).
@@ -141,9 +153,11 @@ func (r *RabbitReconciler) UpdateRabbits(rabbit *farmv1.Rabbit) {
 		r.Log.V(1).Info("Increasing populations second zero nothing to do")
 		return
 	}
-	if rabbit.Status.LastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Before(time.Now()) {
-		r.Log.Info("Increasing population", "old", rabbit.Status.Rabbits, "new", rabbit.Status.Rabbits+1)
+	if rabbit.Status.LastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Before(r.Now()) {
+		r.Log.V(1).Info("Increasing population", "old", rabbit.Status.Rabbits, "new", rabbit.Status.Rabbits+1)
 		rabbit.Status.Rabbits = rabbit.Status.Rabbits + 1
 		rabbit.Status.LastPopulationIncrease = metav1.Now()
+	} else {
+		r.Log.V(1).Info("Increase of population not needed yet", "lastIncrease", rabbit.Status.LastPopulationIncrease, "now", r.Now())
 	}
 }
