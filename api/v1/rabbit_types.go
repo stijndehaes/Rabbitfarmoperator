@@ -36,6 +36,9 @@ type RabbitSpec struct {
 type RabbitStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+
+	Rabbits                int32       `json:"rabbits,omitempty"`
+	LastPopulationIncrease metav1.Time `json:"lastPopulationIncrease,omitempty"`
 }
 
 //+kubebuilder:object:root=true

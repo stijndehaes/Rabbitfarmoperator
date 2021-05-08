@@ -45,6 +45,13 @@ spec:
             type: object
           status:
             description: RabbitStatus defines the observed state of Rabbit
+            properties:
+              lastPopulationIncrease:
+                format: date-time
+                type: string
+              rabbits:
+                format: int32
+                type: integer
             type: object
         type: object
     served: true

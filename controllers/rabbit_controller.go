@@ -71,28 +71,22 @@ func (r *RabbitReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 	r.Log.Info("received update event", "name", rabbit.Name, "namespace", rabbit.Namespace)
+	r.UpdateRabbits(&rabbit)
+	if err := r.Status().Update(ctx, &rabbit); err != nil {
+		return ctrl.Result{}, err
+	}
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      rabbit.Name,
 			Namespace: rabbit.Namespace,
 		},
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
-		nextReplicas, err := r.NextReplicas(rabbit, deployment)
-		if err != nil {
-			return err
-		}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
 		labels := map[string]string{
 			"RabbitFarm": rabbit.Name,
 		}
-		if deployment.Annotations == nil {
-			deployment.Annotations = map[string]string{}
-		}
-		if deployment.Spec.Replicas == nil || nextReplicas != *deployment.Spec.Replicas {
-			deployment.Annotations[lastPopulationIncreaseKey] = time.Now().Format(time.RFC3339)
-		}
 		deployment.Spec = appsv1.DeploymentSpec{
-			Replicas: &nextReplicas,
+			Replicas: &rabbit.Status.Rabbits,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: labels,
 			},
@@ -115,17 +109,12 @@ func (r *RabbitReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return err
 		}
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		r.Log.Error(err, "Failed updating deployment")
 		return ctrl.Result{}, err
 	}
 	if rabbit.Spec.IncreasePopulationSeconds != 0 {
-		lastPopulationIncrease, err := time.Parse(time.RFC3339, deployment.ObjectMeta.Annotations[lastPopulationIncreaseKey])
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		dur := lastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Sub(time.Now())
+		dur := rabbit.Status.LastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Sub(time.Now())
 		r.Log.Info("Scheduling for requeue in", "duration", dur)
 		return ctrl.Result{
 			RequeueAfter: dur,
@@ -142,29 +131,19 @@ func (r *RabbitReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *RabbitReconciler) NextReplicas(rabbit farmv1.Rabbit, deployment *appsv1.Deployment) (int32, error) {
-	if deployment.Spec.Replicas == nil {
-		return rabbit.Spec.StartingPopulation, nil
-	} else {
-		if rabbit.Spec.IncreasePopulationSeconds == 0 {
-			r.Log.V(1).Info("Increase population seconds zero nothing to increase")
-			return rabbit.Spec.StartingPopulation, nil
-		} else {
-			lastPopulationIncrease, err := time.Parse(time.RFC3339, deployment.ObjectMeta.Annotations[lastPopulationIncreaseKey])
-			if err != nil {
-				return 0, err
-			}
-			r.Log.V(1).Info("Checking if population needs to increase",
-				"lastPopulationIncrease", lastPopulationIncrease,
-				"now", time.Now(),
-				"IncreasePopulationSeconds", rabbit.Spec.IncreasePopulationSeconds,
-			)
-			if lastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Before(time.Now()) {
-				r.Log.Info("Increasing population", "old", *deployment.Spec.Replicas, "new", *deployment.Spec.Replicas+1)
-				return *deployment.Spec.Replicas + 1, nil
-			} else {
-				return *deployment.Spec.Replicas, nil
-			}
-		}
+func (r *RabbitReconciler) UpdateRabbits(rabbit *farmv1.Rabbit) {
+	if rabbit.Status.Rabbits == 0 {
+		rabbit.Status.Rabbits = rabbit.Spec.StartingPopulation
+		rabbit.Status.LastPopulationIncrease = metav1.Now()
+		return
+	}
+	if rabbit.Spec.IncreasePopulationSeconds == 0 {
+		r.Log.V(1).Info("Increasing populations second zero nothing to do")
+		return
+	}
+	if rabbit.Status.LastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Before(time.Now()) {
+		r.Log.Info("Increasing population", "old", rabbit.Status.Rabbits, "new", rabbit.Status.Rabbits+1)
+		rabbit.Status.Rabbits = rabbit.Status.Rabbits + 1
+		rabbit.Status.LastPopulationIncrease = metav1.Now()
 	}
 }
