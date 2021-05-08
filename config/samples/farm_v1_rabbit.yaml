@@ -1,0 +1,7 @@
+apiVersion: farm.rabbitco.io/v1
+kind: Rabbit
+metadata:
+  name: rabbit-sample
+spec:
+  # Add fields here
+  foo: bar

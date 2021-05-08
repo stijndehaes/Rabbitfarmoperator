@@ -1,0 +1,24 @@
+# permissions for end users to edit rabbits.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rabbit-editor-role
+rules:
+- apiGroups:
+  - farm.rabbitco.io
+  resources:
+  - rabbits
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - farm.rabbitco.io
+  resources:
+  - rabbits/status
+  verbs:
+  - get
