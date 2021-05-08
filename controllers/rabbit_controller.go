@@ -22,6 +22,7 @@ import (
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"time"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,6 +38,10 @@ type RabbitReconciler struct {
 	Log    logr.Logger
 	Scheme *runtime.Scheme
 }
+
+const (
+	lastPopulationIncreaseKey = "rabbit.farm.io/lastPopulationIncrease"
+)
 
 //+kubebuilder:rbac:groups=farm.rabbitco.io,resources=rabbits,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=farm.rabbitco.io,resources=rabbits/status,verbs=get;update;patch
@@ -66,27 +71,6 @@ func (r *RabbitReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 	r.Log.Info("received update event", "name", rabbit.Name, "namespace", rabbit.Namespace)
-	resourceFuncs := []func(ctx context.Context, rabbit *farmv1.Rabbit) error{
-		r.createRabbits,
-	}
-	for _, resourceFunc := range resourceFuncs {
-		if err := resourceFunc(ctx, &rabbit); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	return ctrl.Result{}, nil
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *RabbitReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&farmv1.Rabbit{}).
-		Owns(&appsv1.Deployment{}).
-		Complete(r)
-}
-
-func (r *RabbitReconciler) createRabbits(ctx context.Context, rabbit *farmv1.Rabbit) error {
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      rabbit.Name,
@@ -94,11 +78,21 @@ func (r *RabbitReconciler) createRabbits(ctx context.Context, rabbit *farmv1.Rab
 		},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
+		nextReplicas, err := r.NextReplicas(rabbit, deployment)
+		if err != nil {
+			return err
+		}
 		labels := map[string]string{
 			"RabbitFarm": rabbit.Name,
 		}
+		if deployment.Annotations == nil {
+			deployment.Annotations = map[string]string{}
+		}
+		if deployment.Spec.Replicas == nil || nextReplicas != *deployment.Spec.Replicas {
+			deployment.Annotations[lastPopulationIncreaseKey] = time.Now().Format(time.RFC3339)
+		}
 		deployment.Spec = appsv1.DeploymentSpec{
-			Replicas: &rabbit.Spec.StartingPopulation,
+			Replicas: &nextReplicas,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: labels,
 			},
@@ -117,10 +111,60 @@ func (r *RabbitReconciler) createRabbits(ctx context.Context, rabbit *farmv1.Rab
 				},
 			},
 		}
-		if err := ctrl.SetControllerReference(rabbit, deployment, r.Scheme); err != nil {
+		if err := ctrl.SetControllerReference(&rabbit, deployment, r.Scheme); err != nil {
 			return err
 		}
 		return nil
 	})
-	return err
+	if err != nil {
+		r.Log.Error(err, "Failed updating deployment")
+		return ctrl.Result{}, err
+	}
+	if rabbit.Spec.IncreasePopulationSeconds != 0 {
+		lastPopulationIncrease, err := time.Parse(time.RFC3339, deployment.ObjectMeta.Annotations[lastPopulationIncreaseKey])
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		dur := lastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Sub(time.Now())
+		r.Log.Info("Scheduling for requeue in", "duration", dur)
+		return ctrl.Result{
+			RequeueAfter: dur,
+		}, nil
+	}
+	return ctrl.Result{}, nil
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *RabbitReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&farmv1.Rabbit{}).
+		Owns(&appsv1.Deployment{}).
+		Complete(r)
+}
+
+func (r *RabbitReconciler) NextReplicas(rabbit farmv1.Rabbit, deployment *appsv1.Deployment) (int32, error) {
+	if deployment.Spec.Replicas == nil {
+		return rabbit.Spec.StartingPopulation, nil
+	} else {
+		if rabbit.Spec.IncreasePopulationSeconds == 0 {
+			r.Log.V(1).Info("Increase population seconds zero nothing to increase")
+			return rabbit.Spec.StartingPopulation, nil
+		} else {
+			lastPopulationIncrease, err := time.Parse(time.RFC3339, deployment.ObjectMeta.Annotations[lastPopulationIncreaseKey])
+			if err != nil {
+				return 0, err
+			}
+			r.Log.V(1).Info("Checking if population needs to increase",
+				"lastPopulationIncrease", lastPopulationIncrease,
+				"now", time.Now(),
+				"IncreasePopulationSeconds", rabbit.Spec.IncreasePopulationSeconds,
+			)
+			if lastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Before(time.Now()) {
+				r.Log.Info("Increasing population", "old", *deployment.Spec.Replicas, "new", *deployment.Spec.Replicas+1)
+				return *deployment.Spec.Replicas + 1, nil
+			} else {
+				return *deployment.Spec.Replicas, nil
+			}
+		}
+	}
 }

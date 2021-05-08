@@ -5,3 +5,4 @@ metadata:
 spec:
   # Add fields here
   startingPopulation: 10
+  increasePopulationSeconds: 30
