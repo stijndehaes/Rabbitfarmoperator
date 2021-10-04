@@ -150,14 +150,20 @@ func (r *RabbitReconciler) UpdateRabbits(rabbit *farmv1.Rabbit) {
 		r.Log.V(1).Info("Increasing populations second zero nothing to do")
 		return
 	}
-	var populationIncrease = calculatePopulationIncrease(r.Clock.Now(), rabbit.Status.LastPopulationIncrease, rabbit.Spec.IncreasePopulationSeconds)
+
+	lastPopulationIncrease := rabbit.Status.LastPopulationIncrease
+	var populationIncrease = calculatePopulationIncrease(r.Clock.Now(), lastPopulationIncrease, rabbit.Spec.IncreasePopulationSeconds)
 	if populationIncrease > 0 {
 		r.Log.V(1).Info("Increasing population", "old", rabbit.Status.Rabbits, "new", rabbit.Status.Rabbits+populationIncrease)
 		rabbit.Status.Rabbits = rabbit.Status.Rabbits + populationIncrease
-		rabbit.Status.LastPopulationIncrease = metav1.NewTime(r.Clock.Now())
+		rabbit.Status.LastPopulationIncrease = r.alignTimeWithInitialOffset(rabbit, lastPopulationIncrease, populationIncrease)
 	} else {
 		r.Log.V(1).Info("Increase of population not needed yet", "lastIncrease", rabbit.Status.LastPopulationIncrease, "now", r.Clock.Now(), "population", rabbit.Status.Rabbits)
 	}
+}
+
+func (r *RabbitReconciler) alignTimeWithInitialOffset(rabbit *farmv1.Rabbit, lastPopulationIncrease metav1.Time, populationIncrease int32) metav1.Time {
+	return metav1.NewTime(lastPopulationIncrease.Add(time.Second * time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Duration(populationIncrease)))
 }
 
 func calculatePopulationIncrease(now time.Time, lastIncrease metav1.Time, increaseSeconds int32) int32 {

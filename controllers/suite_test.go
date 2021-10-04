@@ -111,8 +111,8 @@ var _ = BeforeSuite(func() {
 }, 60)
 
 var interval = time.Millisecond * 250
-var timeout = time.Second * 20
-var duration = time.Second * 2
+var timeout = time.Second * 5
+var duration = time.Second * 1
 
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
@@ -148,23 +148,14 @@ var _ = Describe("Rabbit controller", func() {
 			verifyPopulationEventuallyEquals(ctx, rabbit, population)
 			verifyPopulationConsistantlyEquals(ctx, rabbit, population)
 
-			By("Advancing the clock with 1 second, the population should increase with one")
-			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Second)
+			By("Advancing the clock with 1.5 second, population increases by 1")
+			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Millisecond * 1500)
 			population = population + 1
 			verifyPopulationEventuallyEquals(ctx, rabbit, population)
 
-			By("Advancing the clock with less than second, population remains the same")
-			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Millisecond * 500)
-			verifyPopulationEventuallyEquals(ctx, rabbit, population)
-
-			By("Advancing the clock with 4 seconds compared to last update, population increases with 4")
+			By("Advancing the clock with 3.5 seconds compared to last update, population increases with 4 to account for the offset difference of 500ms after previous update")
 			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Millisecond * 3500)
 			population = population + 4
-			verifyPopulationEventuallyEquals(ctx, rabbit, population)
-
-			By("Advancing the clock with 3.6 seconds compared to last update, population increases with 3")
-			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Millisecond * 3600)
-			population = population + 3
 			verifyPopulationEventuallyEquals(ctx, rabbit, population)
 		})
 	})
