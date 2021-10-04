@@ -132,75 +132,55 @@ var _ = Describe("Rabbit controller", func() {
 
 			By("The initial population status should be the starting population")
 			verifyPopulationEventuallyEquals(ctx, rabbit, rabbit.Spec.StartingPopulation)
+
+			verifyPopulationConsistantlyEquals(ctx, rabbit, rabbit.Spec.StartingPopulation)
 		})
 
-		It("Should increase population every x seconds", func() {
+		It("Should increase population equal to number of seconds passed", func() {
+			var population int32 = 10
+
 			By("Creating a new rabbit farm")
 			ctx := context.Background()
-			rabbit := createRabbitFarm(10, 1)
+			rabbit := createRabbitFarm(population, 1)
 			Expect(k8sClient.Create(ctx, &rabbit)).Should(Succeed())
 
 			By("The initial population status should remain the starting population")
-			verifyPopulationEventuallyEquals(ctx, rabbit, rabbit.Spec.StartingPopulation)
+			verifyPopulationEventuallyEquals(ctx, rabbit, population)
+			verifyPopulationConsistantlyEquals(ctx, rabbit, population)
 
-			Consistently(func() (int32, error) {
-				rabbitLookupKey := types.NamespacedName{Name: rabbit.Name, Namespace: rabbit.Namespace}
-				createdRabbit := &farmv1.Rabbit{}
-				err := k8sClient.Get(ctx, rabbitLookupKey, createdRabbit)
-				if err != nil {
-					return -1, err
-				}
-				return createdRabbit.Status.Rabbits, nil
-			}, duration, interval).Should(Equal(rabbit.Spec.StartingPopulation))
-
-			By("Advancing the clock the population should increase")
+			By("Advancing the clock with 1 second, the population should increase with one")
 			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Second)
-			verifyPopulationEventuallyEquals(ctx, rabbit, rabbit.Spec.StartingPopulation+1)
-		})
+			population = population + 1
+			verifyPopulationEventuallyEquals(ctx, rabbit, population)
 
-		It("Should not increase if 5 seconds are not passed", func() {
-			By("Creating a new rabbit farm")
-			ctx := context.Background()
-			rabbit := createRabbitFarm(10, 5)
-			Expect(k8sClient.Create(ctx, &rabbit)).Should(Succeed())
+			By("Advancing the clock with less than second, population remains the same")
+			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Millisecond * 500)
+			verifyPopulationEventuallyEquals(ctx, rabbit, population)
 
-			By("The initial population status should be the starting population")
-			verifyPopulationEventuallyEquals(ctx, rabbit, rabbit.Spec.StartingPopulation)
+			By("Advancing the clock with 4 seconds compared to last update, population increases with 4")
+			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Millisecond * 3500)
+			population = population + 4
+			verifyPopulationEventuallyEquals(ctx, rabbit, population)
 
-			By("Advancing the clock the population should increase")
-			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Second)
-			verifyPopulationEventuallyEquals(ctx, rabbit, rabbit.Spec.StartingPopulation)
-		})
-
-		It("Should increase population with 3 when service was down for 3 seconds", func() {
-			By("Creating a new rabbit farm")
-			ctx := context.Background()
-			rabbit := createRabbitFarm(10, 1)
-			Expect(k8sClient.Create(ctx, &rabbit)).Should(Succeed())
-
-			By("The initial population status should be the starting population")
-			verifyPopulationEventuallyEquals(ctx, rabbit, rabbit.Spec.StartingPopulation)
-
-			By("Advancing with 3 seconds, mimics downtime of 3 seconds ")
-			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(3 * time.Second)
-			verifyPopulationEventuallyEquals(ctx, rabbit, 13)
-		})
-
-		It("Should increase population with 3 when service was down for 3,5 seconds", func() {
-			By("Creating a new rabbit farm")
-			ctx := context.Background()
-			rabbit := createRabbitFarm(10, 1)
-			Expect(k8sClient.Create(ctx, &rabbit)).Should(Succeed())
-
-			By("The initial population status should be the starting population")
-			verifyPopulationEventuallyEquals(ctx, rabbit, rabbit.Spec.StartingPopulation)
-
-			By("Advancing by 3.5 seconds, mimicing downtime ")
-			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(3500 * time.Millisecond)
-			verifyPopulationEventuallyEquals(ctx, rabbit, 13)
+			By("Advancing the clock with 3.6 seconds compared to last update, population increases with 3")
+			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Millisecond * 3600)
+			population = population + 3
+			verifyPopulationEventuallyEquals(ctx, rabbit, population)
 		})
 	})
 })
+
+func verifyPopulationConsistantlyEquals(ctx context.Context, rabbit farmv1.Rabbit, population int32) bool {
+	return Consistently(func() (int32, error) {
+		rabbitLookupKey := types.NamespacedName{Name: rabbit.Name, Namespace: rabbit.Namespace}
+		createdRabbit := &farmv1.Rabbit{}
+		err := k8sClient.Get(ctx, rabbitLookupKey, createdRabbit)
+		if err != nil {
+			return -1, err
+		}
+		return createdRabbit.Status.Rabbits, nil
+	}, duration, interval).Should(Equal(population))
+}
 
 func verifyPopulationEventuallyEquals(ctx context.Context, rabbit farmv1.Rabbit, population int32) bool {
 	rabbitLookupKey := types.NamespacedName{Name: rabbit.Name, Namespace: rabbit.Namespace}

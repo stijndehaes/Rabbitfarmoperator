@@ -48,10 +48,6 @@ type RabbitReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-const (
-	lastPopulationIncreaseKey = "rabbit.farm.io/lastPopulationIncrease"
-)
-
 //+kubebuilder:rbac:groups=farm.rabbitco.io,resources=rabbits,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=farm.rabbitco.io,resources=rabbits/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=farm.rabbitco.io,resources=rabbits/finalizers,verbs=update
