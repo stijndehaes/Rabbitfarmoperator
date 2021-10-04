@@ -110,6 +110,10 @@ var _ = BeforeSuite(func() {
 
 }, 60)
 
+var interval = time.Millisecond * 250
+var timeout = time.Second * 5
+var duration = time.Second * 1
+
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
 	err := testEnv.Stop()
@@ -117,85 +121,81 @@ var _ = AfterSuite(func() {
 })
 
 var _ = Describe("Rabbit controller", func() {
-	const (
-		interval = time.Millisecond * 250
-		timeout  = time.Second * 20
-		duration = time.Second * 2
-	)
 
 	Context("Should manage rabbit population", func() {
 		It("Should create the farm with the starting population", func() {
 			By("Creating a new rabbit farm")
 			ctx := context.Background()
-			rabbit := &farmv1.Rabbit{
-				TypeMeta: metav1.TypeMeta{APIVersion: farmv1.GroupVersion.String(), Kind: "Rabbit"},
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      uuid.New().String(),
-					Namespace: "default",
-				},
-				Spec: farmv1.RabbitSpec{
-					StartingPopulation: 10,
-				},
-			}
-			Expect(k8sClient.Create(ctx, rabbit)).Should(Succeed())
+			rabbit := createRabbitFarm(10, 1)
+
+			Expect(k8sClient.Create(ctx, &rabbit)).Should(Succeed())
 
 			By("The initial population status should be the starting population")
-			rabbitLookupKey := types.NamespacedName{Name: rabbit.Name, Namespace: rabbit.Namespace}
-			createdRabbit := &farmv1.Rabbit{}
+			verifyPopulationEventuallyEquals(ctx, rabbit, rabbit.Spec.StartingPopulation)
 
-			Eventually(func() (int32, error) {
-				err := k8sClient.Get(ctx, rabbitLookupKey, createdRabbit)
-				if err != nil {
-					return -1, err
-				}
-				return createdRabbit.Status.Rabbits, nil
-			}, 5*timeout, interval).Should(Equal(rabbit.Spec.StartingPopulation))
+			verifyPopulationConsistantlyEquals(ctx, rabbit, rabbit.Spec.StartingPopulation)
 		})
 
-		It("Should increase population every x seconds", func() {
+		It("Should increase population equal to number of seconds passed", func() {
+			var population int32 = 10
+
 			By("Creating a new rabbit farm")
 			ctx := context.Background()
-			rabbit := &farmv1.Rabbit{
-				TypeMeta: metav1.TypeMeta{APIVersion: farmv1.GroupVersion.String(), Kind: "Rabbit"},
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      uuid.New().String(),
-					Namespace: "default",
-				},
-				Spec: farmv1.RabbitSpec{
-					StartingPopulation:        10,
-					IncreasePopulationSeconds: 1,
-				},
-			}
-			Expect(k8sClient.Create(ctx, rabbit)).Should(Succeed())
+			rabbit := createRabbitFarm(population, 1)
+			Expect(k8sClient.Create(ctx, &rabbit)).Should(Succeed())
 
 			By("The initial population status should remain the starting population")
-			rabbitLookupKey := types.NamespacedName{Name: rabbit.Name, Namespace: rabbit.Namespace}
-			createdRabbit := &farmv1.Rabbit{}
-			Eventually(func() (int32, error) {
-				err := k8sClient.Get(ctx, rabbitLookupKey, createdRabbit)
-				if err != nil {
-					return -1, err
-				}
-				return createdRabbit.Status.Rabbits, nil
-			}, timeout, interval).Should(Equal(rabbit.Spec.StartingPopulation))
-			Consistently(func() (int32, error) {
-				err := k8sClient.Get(ctx, rabbitLookupKey, createdRabbit)
-				if err != nil {
-					return -1, err
-				}
-				return createdRabbit.Status.Rabbits, nil
-			}, duration, interval).Should(Equal(rabbit.Spec.StartingPopulation))
+			verifyPopulationEventuallyEquals(ctx, rabbit, population)
+			verifyPopulationConsistantlyEquals(ctx, rabbit, population)
 
-			By("Advancing the clock the population should increase")
-			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Second)
-			Eventually(func() (int32, error) {
-				err := k8sClient.Get(ctx, rabbitLookupKey, createdRabbit)
-				if err != nil {
-					return -1, err
-				}
-				return createdRabbit.Status.Rabbits, nil
-			}, timeout, interval).Should(Equal(rabbit.Spec.StartingPopulation + 1))
+			By("Advancing the clock with 1.5 second, population increases by 1")
+			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Millisecond * 1500)
+			population = population + 1
+			verifyPopulationEventuallyEquals(ctx, rabbit, population)
+
+			By("Advancing the clock with 3.5 seconds compared to last update, population increases with 4 to account for the offset difference of 500ms after previous update")
+			fakeClock.CurrentTime = fakeClock.CurrentTime.Add(time.Millisecond * 3500)
+			population = population + 4
+			verifyPopulationEventuallyEquals(ctx, rabbit, population)
 		})
 	})
-
 })
+
+func verifyPopulationConsistantlyEquals(ctx context.Context, rabbit farmv1.Rabbit, population int32) bool {
+	return Consistently(func() (int32, error) {
+		rabbitLookupKey := types.NamespacedName{Name: rabbit.Name, Namespace: rabbit.Namespace}
+		createdRabbit := &farmv1.Rabbit{}
+		err := k8sClient.Get(ctx, rabbitLookupKey, createdRabbit)
+		if err != nil {
+			return -1, err
+		}
+		return createdRabbit.Status.Rabbits, nil
+	}, duration, interval).Should(Equal(population))
+}
+
+func verifyPopulationEventuallyEquals(ctx context.Context, rabbit farmv1.Rabbit, population int32) bool {
+	rabbitLookupKey := types.NamespacedName{Name: rabbit.Name, Namespace: rabbit.Namespace}
+	createdRabbit := &farmv1.Rabbit{}
+
+	return Eventually(func() (int32, error) {
+		err := k8sClient.Get(ctx, rabbitLookupKey, createdRabbit)
+		if err != nil {
+			return -1, err
+		}
+		return createdRabbit.Status.Rabbits, nil
+	}, 1*timeout, interval).Should(Equal(population))
+}
+
+func createRabbitFarm(startingPopulation int32, increaseSeconds int32) farmv1.Rabbit {
+	return farmv1.Rabbit{
+		TypeMeta: metav1.TypeMeta{APIVersion: farmv1.GroupVersion.String(), Kind: "Rabbit"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      uuid.New().String(),
+			Namespace: "default",
+		},
+		Spec: farmv1.RabbitSpec{
+			StartingPopulation:        startingPopulation,
+			IncreasePopulationSeconds: increaseSeconds,
+		},
+	}
+}

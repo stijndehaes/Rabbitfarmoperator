@@ -19,7 +19,7 @@ package controllers
 import (
 	"context"
 	appsv1 "k8s.io/api/apps/v1"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"time"
@@ -47,10 +47,6 @@ type RabbitReconciler struct {
 	Log    logr.Logger
 	Scheme *runtime.Scheme
 }
-
-const (
-	lastPopulationIncreaseKey = "rabbit.farm.io/lastPopulationIncrease"
-)
 
 //+kubebuilder:rbac:groups=farm.rabbitco.io,resources=rabbits,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=farm.rabbitco.io,resources=rabbits/status,verbs=get;update;patch
@@ -123,7 +119,7 @@ func (r *RabbitReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 	if rabbit.Spec.IncreasePopulationSeconds != 0 {
-		dur := rabbit.Status.LastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Sub(r.Now())
+		dur := rabbit.Status.LastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Sub(r.Clock.Now())
 		r.Log.Info("Scheduling for requeue in", "duration", dur)
 		return ctrl.Result{
 			RequeueAfter: dur,
@@ -135,6 +131,7 @@ func (r *RabbitReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // SetupWithManager sets up the controller with the Manager.
 func (r *RabbitReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Clock == nil {
+		r.Log.V(1).Info("No clock specified, creating realClock")
 		r.Clock = &RealClock{}
 	}
 	return ctrl.NewControllerManagedBy(mgr).
@@ -146,18 +143,33 @@ func (r *RabbitReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *RabbitReconciler) UpdateRabbits(rabbit *farmv1.Rabbit) {
 	if rabbit.Status.Rabbits == 0 {
 		rabbit.Status.Rabbits = rabbit.Spec.StartingPopulation
-		rabbit.Status.LastPopulationIncrease = metav1.Now()
+		rabbit.Status.LastPopulationIncrease = metav1.NewTime(r.Clock.Now())
 		return
 	}
 	if rabbit.Spec.IncreasePopulationSeconds == 0 {
 		r.Log.V(1).Info("Increasing populations second zero nothing to do")
 		return
 	}
-	if rabbit.Status.LastPopulationIncrease.Add(time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Second).Before(r.Now()) {
-		r.Log.V(1).Info("Increasing population", "old", rabbit.Status.Rabbits, "new", rabbit.Status.Rabbits+1)
-		rabbit.Status.Rabbits = rabbit.Status.Rabbits + 1
-		rabbit.Status.LastPopulationIncrease = metav1.Now()
+
+	lastPopulationIncrease := rabbit.Status.LastPopulationIncrease
+	var populationIncrease = calculatePopulationIncrease(r.Clock.Now(), lastPopulationIncrease, rabbit.Spec.IncreasePopulationSeconds)
+	if populationIncrease > 0 {
+		r.Log.V(1).Info("Increasing population", "old", rabbit.Status.Rabbits, "new", rabbit.Status.Rabbits+populationIncrease)
+		rabbit.Status.Rabbits = rabbit.Status.Rabbits + populationIncrease
+		rabbit.Status.LastPopulationIncrease = r.alignTimeWithInitialOffset(rabbit, lastPopulationIncrease, populationIncrease)
 	} else {
-		r.Log.V(1).Info("Increase of population not needed yet", "lastIncrease", rabbit.Status.LastPopulationIncrease, "now", r.Now())
+		r.Log.V(1).Info("Increase of population not needed yet", "lastIncrease", rabbit.Status.LastPopulationIncrease, "now", r.Clock.Now(), "population", rabbit.Status.Rabbits)
+	}
+}
+
+func (r *RabbitReconciler) alignTimeWithInitialOffset(rabbit *farmv1.Rabbit, lastPopulationIncrease metav1.Time, populationIncrease int32) metav1.Time {
+	return metav1.NewTime(lastPopulationIncrease.Add(time.Second * time.Duration(rabbit.Spec.IncreasePopulationSeconds) * time.Duration(populationIncrease)))
+}
+
+func calculatePopulationIncrease(now time.Time, lastIncrease metav1.Time, increaseSeconds int32) int32 {
+	if now.After(lastIncrease.Time) {
+		return int32(now.Unix()-lastIncrease.Unix()) / increaseSeconds
+	} else {
+		return 0
 	}
 }
